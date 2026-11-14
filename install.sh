@@ -161,6 +161,28 @@ if [ "$INSTALLED" = "1" ]; then
   else
     wrn "Tak bisa menulis php.ini. Tambah manual: extension=dygo_loader  (di $INIFILE)"
   fi
+
+  # -- 4b) aktifkan juga untuk SAPI WEB (Debian/Ubuntu: fpm/apache2 punya conf.d sendiri)
+  WEB_RESTART=0
+  if [ -d /etc/php ]; then
+    printf "; DYGO Loader\nextension=dygo_loader\n" > "$TMP/ini" 2>/dev/null
+    for d in /etc/php/*/fpm/conf.d /etc/php/*/apache2/conf.d; do
+      [ -d "$d" ] || continue
+      tgt="$d/99-dygo-loader.ini"
+      if [ ! -f "$tgt" ]; then
+        cp "$TMP/ini" "$tgt" 2>/dev/null || sudo cp "$TMP/ini" "$tgt" 2>/dev/null || continue
+      fi
+      ok "loader diaktifkan utk web: $tgt"; WEB_RESTART=1
+    done
+  fi
+  # restart layanan web agar php.ini terbaca ulang
+  if [ "$WEB_RESTART" = "1" ]; then
+    for svc in php-fpm "php${PHPVER}-fpm" php8.5-fpm php8.4-fpm php8.3-fpm php8.2-fpm php8.1-fpm apache2 nginx; do
+      if command -v systemctl >/dev/null 2>&1 && systemctl list-units --type=service 2>/dev/null | grep -q "$svc"; then
+        sudo systemctl restart "$svc" 2>/dev/null && inf "restart layanan: $svc" || true
+      fi
+    done
+  fi
 else
   wrn "Loader C tidak terpasang (tanpa prebuilt & tanpa phpize)."
   inf "Fallback PHP-murni disiapkan di $DYGO_DIR (butuh master key)."
