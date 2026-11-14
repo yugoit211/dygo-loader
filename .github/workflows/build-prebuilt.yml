@@ -1,0 +1,84 @@
+name: build-prebuilt-loaders
+
+# Membangun biner loader KEYLESS (tanpa master key) untuk banyak versi PHP & OS,
+# lalu commit ke prebuilt/<os-arch>/<abi>/ agar install.sh (via tarball) langsung
+# dapat biner tanpa perlu php-dev di server klien.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'loader/**'
+      - '.github/workflows/build-prebuilt.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        php: ['8.1', '8.2', '8.3', '8.4', '8.5']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP ${{ matrix.php }}
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+
+      - name: Build loader (keyless)
+        working-directory: loader
+        run: |
+          phpize
+          ./configure
+          make
+          test -f modules/dygo_loader.so
+
+      - name: Place into prebuilt/
+        run: |
+          OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+          ARCH=$(uname -m); case "$ARCH" in amd64) ARCH=x86_64;; esac
+          ABI=$(php -r 'echo preg_replace("/\D/","",(string)ini_get("extension_dir"));')
+          DEST="prebuilt/${OS}-${ARCH}/${ABI}"
+          mkdir -p "$DEST"
+          cp loader/modules/dygo_loader.so "$DEST/dygo_loader.so"
+          echo "placed=$DEST/dygo_loader.so" >> "$GITHUB_ENV"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dygo_loader-${{ matrix.os }}-php${{ matrix.php }}
+          path: prebuilt/**/dygo_loader.so
+
+  commit:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download all prebuilt
+        uses: actions/download-artifact@v4
+        with:
+          path: _artifacts
+      - name: Merge into prebuilt/ and commit
+        run: |
+          # artefak mungkin menamai ulang; salin semua .so ke posisi prebuilt aslinya
+          find _artifacts -name 'dygo_loader.so' -path '*prebuilt*' | while read -r f; do
+            rel="prebuilt/${f#*prebuilt/}"
+            mkdir -p "$(dirname "$rel")"
+            cp "$f" "$rel"
+          done
+          rm -rf _artifacts
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add prebuilt
+          if git diff --cached --quiet; then
+            echo "Tidak ada perubahan prebuilt."
+          else
+            git commit -m "ci: update prebuilt keyless loaders [skip ci]"
+            git push
+          fi

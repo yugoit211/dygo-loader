@@ -1,0 +1,27 @@
+# build artifacts (jangan commit; prebuilt/ diisi oleh CI)
+loader/.libs/
+loader/.deps/
+loader/build/
+loader/modules/
+loader/*.lo
+loader/*.la
+loader/*.o
+loader/Makefile*
+loader/config.nice
+loader/configure*
+loader/autom4te.cache/
+loader/include/
+loader/run-tests.php
+loader/acinclude.m4
+loader/aclocal.m4
+loader/config.guess
+loader/config.sub
+loader/libtool
+loader/ltmain.sh
+loader/missing
+loader/install-sh
+loader/mkinstalldirs
+.DS_Store
+# master key must NEVER be here
+dygo.key
+keys/
