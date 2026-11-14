@@ -39,16 +39,14 @@ ok "PHP $PHPVER ($OS/$ARCH), ABI $ABI, extension_dir: $EXTDIR"
 # -- 1b) minta master key DI AWAL (interaktif, jalan juga lewat curl|bash) ------
 is_hex64() { printf '%s' "$1" | grep -Eqi '^[0-9a-f]{64}$'; }
 KEY_INPUT="${DYGO_KEY:-}"
-if [ -z "$KEY_INPUT" ] && [ -r /dev/tty ]; then
+if [ -z "$KEY_INPUT" ] && { [ -r /dev/tty ] && [ -w /dev/tty ]; } 2>/dev/null; then
   say ""
-  printf "%b" "${c_b}Master key dari vendor (64 hex)${c_rst} — tempel lalu Enter, atau Enter untuk lewati:\n> " > /dev/tty
-  IFS= read -r _k < /dev/tty || _k=""
+  printf "%b" "${c_b}Master key dari vendor (64 hex)${c_rst} — tempel lalu Enter:\n> " > /dev/tty 2>/dev/null
+  IFS= read -r _k < /dev/tty 2>/dev/null || _k=""
   _k="$(printf '%s' "$_k" | tr -d ' \t\r\n')"
   if [ -n "$_k" ]; then
-    if is_hex64 "$_k"; then KEY_INPUT="$_k"; ok "master key diterima."
-    else wrn "Key bukan 64 hex — dilewati. Bisa dipasang nanti."; fi
-  else
-    inf "Dilewati — master key bisa dipasang setelah install."
+    if is_hex64 "$_k"; then KEY_INPUT="$_k"
+    else wrn "Key bukan 64 hex — akan diminta lagi saat verifikasi."; fi
   fi
 fi
 
@@ -69,6 +67,51 @@ else
 fi
 
 mkdir -p "$DYGO_DIR" "$BIN_DIR"
+
+# -- 2b) GATE: verifikasi master key SEBELUM memasang apa pun ------------------
+# Jika gagal, instalasi DIHENTIKAN (loader tidak dipasang). Jika berhasil, lanjut.
+VF="${DYGO_VERIFY_FILE:-}"
+[ -z "$VF" ] && [ -f "$DYGO_DIR/canary.php" ]   && VF="$DYGO_DIR/canary.php"
+[ -z "$VF" ] && [ -f "$SRC/canary.dygo.php" ]   && VF="$SRC/canary.dygo.php"
+
+_read_tty_key() {
+  { [ -r /dev/tty ] && [ -w /dev/tty ]; } 2>/dev/null || return 1
+  printf "%b" "$1" > /dev/tty 2>/dev/null || return 1
+  IFS= read -r _rk < /dev/tty 2>/dev/null || return 1
+  printf '%s' "$_rk" | tr -d ' \t\r\n'
+}
+
+if [ -n "$VF" ] && [ -f "$VF" ]; then
+  gate=0
+  while : ; do
+    # pastikan ada key untuk diuji
+    if [ -z "$KEY_INPUT" ]; then
+      if [ "$gate" -lt 3 ] && KEY_INPUT="$(_read_tty_key "${c_b}Master key dari vendor (64 hex)${c_rst} diperlukan:\n> ")"; then
+        gate=$((gate + 1)); [ -z "$KEY_INPUT" ] && die "Instalasi dihentikan: master key diperlukan."
+      else
+        die "Instalasi dihentikan: master key diperlukan untuk melanjutkan."
+      fi
+    fi
+    if ! is_hex64 "$KEY_INPUT"; then
+      wrn "Key bukan 64 karakter hex."; KEY_INPUT=""
+      [ -r /dev/tty ] && [ "$gate" -lt 3 ] && continue || die "Instalasi dihentikan: format key salah."
+    fi
+    # uji terhadap canary (tanpa menyentuh sistem)
+    if DYGO_KEY="$KEY_INPUT" "$PHP" "$SRC/bin/dygo" verify "$VF" >/dev/null 2>&1; then
+      ok "Master key TERVERIFIKASI cocok — melanjutkan instalasi."
+      break
+    fi
+    wrn "Master key TIDAK cocok dengan file vendor."
+    gate=$((gate + 1))
+    if [ "$gate" -lt 3 ] && KEY_INPUT="$(_read_tty_key "Masukkan ulang master key (64 hex):\n> ")" && [ -n "$KEY_INPUT" ]; then
+      continue
+    fi
+    die "Instalasi DIHENTIKAN: master key salah (verifikasi gagal). Tidak ada yang dipasang."
+  done
+else
+  inf "Tak ada file canary — verifikasi key dilewati."
+  inf "Uji manual setelah deploy: dygo verify <file-ter-encode-dari-vendor>"
+fi
 
 # -- 3) pasang biner loader: prebuilt -> build -> fallback ---------------------
 SO_NAME="dygo_loader.so"
@@ -156,6 +199,9 @@ if [ "$LINKED" = "0" ]; then
   esac
 fi
 
+# simpan salinan canary untuk verifikasi manual nanti (dygo verify)
+[ -n "$VF" ] && [ -f "$VF" ] && cp "$VF" "$DYGO_DIR/canary.php" 2>/dev/null || true
+
 # -- 6) master key (dari vendor) -----------------------------------------------
 KEYFILE="$DYGO_DIR/dygo.key"
 say ""
@@ -169,38 +215,6 @@ else
   say "  Minta master key (64 hex) ke vendor Anda, lalu:"
   say "    ${c_b}echo 'KEY_HEX_DARI_VENDOR' > $KEYFILE${c_rst}"
   say "    atau pasang interaktif:  ${c_b}dygo setkey${c_rst}"
-fi
-
-# -- 6b) verifikasi master key otomatis (bila ada file canary) -----------------
-VF="${DYGO_VERIFY_FILE:-}"
-[ -z "$VF" ] && [ -f "$DYGO_DIR/canary.php" ] && VF="$DYGO_DIR/canary.php"
-[ -z "$VF" ] && [ -f "$SRC/canary.dygo.php" ] && VF="$SRC/canary.dygo.php"
-verify_key() { "$PHP" "$DYGO_DIR/app/bin/dygo" verify "$1" >/dev/null 2>&1; }
-
-if [ -n "$VF" ] && [ -f "$VF" ] && { [ -f "$KEYFILE" ] || [ -n "$KEY_INPUT" ]; }; then
-  say ""
-  tries=0
-  while : ; do
-    if verify_key "$VF"; then
-      ok "Master key TERVERIFIKASI cocok dengan file canary."
-      break
-    fi
-    wrn "Master key TIDAK cocok dengan file verifikasi — kemungkinan key salah."
-    tries=$((tries + 1))
-    if [ "$tries" -ge 2 ] || [ ! -r /dev/tty ]; then
-      wrn "Perbaiki nanti:  dygo setkey   lalu   dygo verify \"$VF\""
-      break
-    fi
-    printf "%b" "${c_b}Masukkan ulang master key (64 hex)${c_rst}, atau Enter untuk lewati:\n> " > /dev/tty
-    IFS= read -r _k < /dev/tty || _k=""
-    _k="$(printf '%s' "$_k" | tr -d ' \t\r\n')"
-    [ -z "$_k" ] && { wrn "Dilewati."; break; }
-    if is_hex64 "$_k"; then printf '%s\n' "$_k" > "$KEYFILE"; chmod 600 "$KEYFILE" 2>/dev/null || true
-    else wrn "Key bukan 64 hex."; fi
-  done
-elif [ -f "$KEYFILE" ] || [ -n "$KEY_INPUT" ]; then
-  inf "Verifikasi key otomatis dilewati (tak ada file canary dari vendor)."
-  inf "Uji manual setelah deploy:  dygo verify <file-ter-encode-dari-vendor>"
 fi
 
 # -- 7) verifikasi otomatis (dygo doctor) --------------------------------------
