@@ -232,11 +232,34 @@ if [ -n "$KEY_INPUT" ]; then
   ok "master key tersimpan → $KEYFILE"
 elif [ -f "$KEYFILE" ]; then
   ok "master key sudah ada: $KEYFILE"
+  KEY_INPUT="$(tr -d ' \t\r\n' < "$KEYFILE" 2>/dev/null)"
 else
   wrn "Master key BELUM dipasang."
   say "  Minta master key (64 hex) ke vendor Anda, lalu:"
   say "    ${c_b}echo 'KEY_HEX_DARI_VENDOR' > $KEYFILE${c_rst}"
   say "    atau pasang interaktif:  ${c_b}dygo setkey${c_rst}"
+fi
+
+# -- 6b) buat key terbaca oleh SAPI WEB (php-fpm sering jalan sbg www-data) ----
+# loader mencari juga /etc/dygo/dygo.key → taruh di sana agar web bisa membaca.
+if [ -n "$KEY_INPUT" ] && is_hex64 "$KEY_INPUT"; then
+  if mkdir -p /etc/dygo 2>/dev/null || sudo mkdir -p /etc/dygo 2>/dev/null; then
+    if printf '%s\n' "$KEY_INPUT" > /etc/dygo/dygo.key 2>/dev/null \
+       || printf '%s\n' "$KEY_INPUT" | sudo tee /etc/dygo/dygo.key >/dev/null 2>&1; then
+      # batasi akses: root + grup web (www-data/nginx/apache) bila ada
+      WG=""
+      for g in www-data nginx apache www; do
+        getent group "$g" >/dev/null 2>&1 && { WG="$g"; break; }
+      done
+      if [ -n "$WG" ]; then
+        chown root:"$WG" /etc/dygo/dygo.key 2>/dev/null || sudo chown root:"$WG" /etc/dygo/dygo.key 2>/dev/null || true
+        chmod 640 /etc/dygo/dygo.key 2>/dev/null || sudo chmod 640 /etc/dygo/dygo.key 2>/dev/null || true
+      else
+        chmod 644 /etc/dygo/dygo.key 2>/dev/null || sudo chmod 644 /etc/dygo/dygo.key 2>/dev/null || true
+      fi
+      ok "master key utk web disalin ke /etc/dygo/dygo.key${WG:+ (grup $WG)}"
+    fi
+  fi
 fi
 
 # -- 7) verifikasi otomatis (dygo doctor) --------------------------------------
