@@ -36,6 +36,22 @@ case "$ARCH" in aarch64) ARCH=aarch64;; arm64) ARCH=arm64;; x86_64|amd64) ARCH=x
 PLAT="${OS}-${ARCH}"
 ok "PHP $PHPVER ($OS/$ARCH), ABI $ABI, extension_dir: $EXTDIR"
 
+# -- 1b) minta master key DI AWAL (interaktif, jalan juga lewat curl|bash) ------
+is_hex64() { printf '%s' "$1" | grep -Eqi '^[0-9a-f]{64}$'; }
+KEY_INPUT="${DYGO_KEY:-}"
+if [ -z "$KEY_INPUT" ] && [ -r /dev/tty ]; then
+  say ""
+  printf "%b" "${c_b}Master key dari vendor (64 hex)${c_rst} — tempel lalu Enter, atau Enter untuk lewati:\n> " > /dev/tty
+  IFS= read -r _k < /dev/tty || _k=""
+  _k="$(printf '%s' "$_k" | tr -d ' \t\r\n')"
+  if [ -n "$_k" ]; then
+    if is_hex64 "$_k"; then KEY_INPUT="$_k"; ok "master key diterima."
+    else wrn "Key bukan 64 hex — dilewati. Bisa dipasang nanti."; fi
+  else
+    inf "Dilewati — master key bisa dipasang setelah install."
+  fi
+fi
+
 # -- 2) ambil sumber (tarball repo) atau pakai lokal ---------------------------
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 if [ -n "${DYGO_LOCAL_SRC:-}" ]; then
@@ -117,28 +133,54 @@ exec "$PHP" "$DYGO_DIR/app/bin/dygo" "\$@"
 EOF
 chmod +x "$BIN_DIR/dygo"
 ok "perintah 'dygo' terpasang: $BIN_DIR/dygo"
-case ":$PATH:" in *":$BIN_DIR:"*) : ;; *) wrn "Tambahkan ke PATH: export PATH=\"$BIN_DIR:\$PATH\"";; esac
+
+# jadikan 'dygo' langsung bisa dipanggil (tanpa buka terminal baru)
+LINKED=0
+if [ "$(id -u 2>/dev/null)" = "0" ] && [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then
+  if ln -sf "$BIN_DIR/dygo" /usr/local/bin/dygo 2>/dev/null; then
+    ok "perintah 'dygo' aktif global: /usr/local/bin/dygo"; LINKED=1
+  fi
+fi
+if [ "$LINKED" = "0" ]; then
+  case ":$PATH:" in
+    *":$BIN_DIR:"*) ok "'$BIN_DIR' sudah di PATH." ;;
+    *)
+      for rc in "$HOMEDIR/.bashrc" "$HOMEDIR/.profile" "$HOMEDIR/.zshrc"; do
+        [ -f "$rc" ] || continue
+        grep -q '# dygo-client PATH' "$rc" 2>/dev/null && continue
+        printf '\n# dygo-client PATH\nexport PATH="%s:$PATH"\n' "$BIN_DIR" >> "$rc"
+      done
+      export PATH="$BIN_DIR:$PATH"
+      ok "PATH diperbarui (berlaku di terminal baru; sesi ini: PATH sudah di-set)."
+      ;;
+  esac
+fi
 
 # -- 6) master key (dari vendor) -----------------------------------------------
 KEYFILE="$DYGO_DIR/dygo.key"
 say ""
-if [ -n "${DYGO_KEY:-}" ]; then
-  printf '%s\n' "$DYGO_KEY" > "$KEYFILE"; chmod 600 "$KEYFILE" 2>/dev/null || true
-  ok "master key tersimpan dari env DYGO_KEY → $KEYFILE"
+if [ -n "$KEY_INPUT" ]; then
+  printf '%s\n' "$KEY_INPUT" > "$KEYFILE"; chmod 600 "$KEYFILE" 2>/dev/null || true
+  ok "master key tersimpan → $KEYFILE"
 elif [ -f "$KEYFILE" ]; then
   ok "master key sudah ada: $KEYFILE"
 else
   wrn "Master key BELUM dipasang."
-  say "  Minta master key (64 hex) ke vendor Anda, lalu salah satu:"
+  say "  Minta master key (64 hex) ke vendor Anda, lalu:"
   say "    ${c_b}echo 'KEY_HEX_DARI_VENDOR' > $KEYFILE${c_rst}"
-  say "    atau set env sebelum menjalankan PHP:  export DYGO_KEY=KEY_HEX"
+  say "    atau pasang interaktif:  ${c_b}dygo setkey${c_rst}"
 fi
 
-# -- 7) verifikasi -------------------------------------------------------------
+# -- 7) verifikasi otomatis (dygo doctor) --------------------------------------
 say ""
 if "$PHP" -m 2>/dev/null | grep -qi dygo_loader; then
   ok "Terverifikasi: dygo_loader AKTIF."
 else
-  inf "Jalankan: dygo doctor   (untuk web, restart php-fpm/apache)."
+  wrn "dygo_loader belum terbaca di PHP CLI. Untuk web, restart php-fpm/apache."
 fi
-inf "Selesai. File ter-encode dari vendor kini jalan otomatis setelah key terpasang."
+say ""
+inf "Menjalankan 'dygo doctor' ..."
+say ""
+"$PHP" "$DYGO_DIR/app/bin/dygo" doctor 2>/dev/null || true
+say ""
+inf "Selesai. File ter-encode dari vendor jalan otomatis setelah key terpasang."
