@@ -46,10 +46,27 @@ Loader mencari key berurutan: `DYGO_KEY` → `DYGO_MASTER_KEY` → `DYGO_KEY_FIL
 > Untuk web (Apache/Nginx + php-fpm): simpan key sebagai **file** di atas (env
 > sering tak terbaca oleh php-fpm), lalu **restart** php-fpm.
 
+## Verifikasi master key
+
+Installer hanya mengecek **format** key (64 hex), bukan kebenarannya. Untuk
+memastikan key benar-benar cocok, uji dengan file ter-encode dari vendor:
+
+```bash
+dygo verify /path/ke/file-dari-vendor.php
+# ✓ Master key COCOK …   atau   ✗ Master key TIDAK cocok
+```
+
+Vendor dapat mengirim **file canary** (`dygo canary`). Taruh di
+`~/.dygo-client/canary.php` → installer **otomatis memverifikasi** key saat
+install (dan minta ketik ulang bila salah). Atau jalankan installer dengan
+`DYGO_VERIFY_FILE=/path/canary.php`.
+
 ## Perintah
 
 ```bash
 dygo doctor       # cek: loader aktif? key terpasang?
+dygo verify <f>   # uji master key cocok dengan file ter-encode
+dygo setkey       # pasang/ubah master key (interaktif)
 dygo machineid    # node-hash server ini → kirim ke vendor untuk node-lock
 dygo uninstall    # lepas loader
 ```

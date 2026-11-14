@@ -171,6 +171,38 @@ else
   say "    atau pasang interaktif:  ${c_b}dygo setkey${c_rst}"
 fi
 
+# -- 6b) verifikasi master key otomatis (bila ada file canary) -----------------
+VF="${DYGO_VERIFY_FILE:-}"
+[ -z "$VF" ] && [ -f "$DYGO_DIR/canary.php" ] && VF="$DYGO_DIR/canary.php"
+[ -z "$VF" ] && [ -f "$SRC/canary.dygo.php" ] && VF="$SRC/canary.dygo.php"
+verify_key() { "$PHP" "$DYGO_DIR/app/bin/dygo" verify "$1" >/dev/null 2>&1; }
+
+if [ -n "$VF" ] && [ -f "$VF" ] && { [ -f "$KEYFILE" ] || [ -n "$KEY_INPUT" ]; }; then
+  say ""
+  tries=0
+  while : ; do
+    if verify_key "$VF"; then
+      ok "Master key TERVERIFIKASI cocok dengan file canary."
+      break
+    fi
+    wrn "Master key TIDAK cocok dengan file verifikasi — kemungkinan key salah."
+    tries=$((tries + 1))
+    if [ "$tries" -ge 2 ] || [ ! -r /dev/tty ]; then
+      wrn "Perbaiki nanti:  dygo setkey   lalu   dygo verify \"$VF\""
+      break
+    fi
+    printf "%b" "${c_b}Masukkan ulang master key (64 hex)${c_rst}, atau Enter untuk lewati:\n> " > /dev/tty
+    IFS= read -r _k < /dev/tty || _k=""
+    _k="$(printf '%s' "$_k" | tr -d ' \t\r\n')"
+    [ -z "$_k" ] && { wrn "Dilewati."; break; }
+    if is_hex64 "$_k"; then printf '%s\n' "$_k" > "$KEYFILE"; chmod 600 "$KEYFILE" 2>/dev/null || true
+    else wrn "Key bukan 64 hex."; fi
+  done
+elif [ -f "$KEYFILE" ] || [ -n "$KEY_INPUT" ]; then
+  inf "Verifikasi key otomatis dilewati (tak ada file canary dari vendor)."
+  inf "Uji manual setelah deploy:  dygo verify <file-ter-encode-dari-vendor>"
+fi
+
 # -- 7) verifikasi otomatis (dygo doctor) --------------------------------------
 say ""
 if "$PHP" -m 2>/dev/null | grep -qi dygo_loader; then
